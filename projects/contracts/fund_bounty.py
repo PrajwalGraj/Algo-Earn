@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import base64
 from dotenv import load_dotenv
@@ -17,21 +18,27 @@ from algosdk.v2client import algod
 
 
 # ==============================
-# CONFIG
-# ==============================
-
-APP_ID = 755780805
-BOUNTY_AMOUNT = 1_000_000  # 1 ALGO in microAlgos
-
-ALGOD_ADDRESS = "https://testnet-api.algonode.network"
-ALGOD_TOKEN = ""
-
-
-# ==============================
 # LOAD ENV
 # ==============================
 
 load_dotenv()
+
+def _get_app_id() -> int:
+    app_id_value = sys.argv[1] if len(sys.argv) > 1 else os.getenv("APP_ID")
+    if not app_id_value:
+        raise ValueError("Set APP_ID in .env or pass it as the first argument.")
+    return int(app_id_value)
+
+
+# ==============================
+# CONFIG
+# ==============================
+
+APP_ID = _get_app_id()
+BOUNTY_AMOUNT = 1_000_000  # 1 ALGO in microAlgos
+
+ALGOD_SERVER = os.getenv("ALGOD_SERVER", "https://testnet-api.algonode.cloud")
+ALGOD_TOKEN = os.getenv("ALGOD_TOKEN", "")
 
 CREATOR_MNEMONIC = os.getenv("CREATOR_MNEMONIC")
 if not CREATOR_MNEMONIC:
@@ -46,8 +53,8 @@ signer = AccountTransactionSigner(creator_private_key)
 # CONNECT CLIENT
 # ==============================
 
-client = algod.AlgodClient(ALGOD_TOKEN, ALGOD_ADDRESS)
-print("Connected to:", ALGOD_ADDRESS)
+client = algod.AlgodClient(ALGOD_TOKEN, ALGOD_SERVER)
+print("Connected to:", ALGOD_SERVER)
 
 app_address = get_application_address(APP_ID)
 

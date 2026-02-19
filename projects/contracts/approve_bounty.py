@@ -1,4 +1,5 @@
 import os
+import sys
 from dotenv import load_dotenv
 
 from algosdk import account
@@ -12,11 +13,11 @@ from algosdk.logic import get_application_address
 from algosdk.v2client import algod
 
 
-# ==============================
-# CONFIG
-# ==============================
-
-APP_ID = 755780805
+def _get_app_id() -> int:
+    app_id_value = sys.argv[1] if len(sys.argv) > 1 else os.getenv("APP_ID")
+    if not app_id_value:
+        raise ValueError("Set APP_ID in .env or pass it as the first argument.")
+    return int(app_id_value)
 
 
 # ==============================
@@ -24,6 +25,8 @@ APP_ID = 755780805
 # ==============================
 
 load_dotenv()
+
+APP_ID = _get_app_id()
 
 CREATOR_MNEMONIC = os.getenv("CREATOR_MNEMONIC")
 WORKER_MNEMONIC = os.getenv("WORKER_MNEMONIC")
