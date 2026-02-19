@@ -1,0 +1,431 @@
+#pragma version 10
+#pragma typetrack false
+
+// smart_contracts.bounty.contract.Bounty.__algopy_entrypoint_with_init() -> uint64:
+main:
+    intcblock 0 1 2
+    bytecblock "status" "creator" "amount" "worker"
+    txn ApplicationID
+    bnz main_after_if_else@2
+    // smart_contracts/bounty/contract.py:14
+    // self.creator = Txn.sender
+    bytec_1 // "creator"
+    txn Sender
+    app_global_put
+    // smart_contracts/bounty/contract.py:15
+    // self.worker = Global.zero_address
+    bytec_3 // "worker"
+    global ZeroAddress
+    app_global_put
+    // smart_contracts/bounty/contract.py:16
+    // self.amount = UInt64(0)
+    bytec_2 // "amount"
+    intc_0 // 0
+    app_global_put
+    // smart_contracts/bounty/contract.py:17
+    // self.status = UInt64(0)
+    bytec_0 // "status"
+    intc_0 // 0
+    app_global_put
+
+main_after_if_else@2:
+    // smart_contracts/bounty/contract.py:5
+    // class Bounty(ARC4Contract):
+    txn NumAppArgs
+    bz main_bare_routing@11
+    pushbytess 0x87a64bac 0xf1577726 0xeb2467f6 0xd611dbd8 0x31f26a9b 0xed15edb6 // method "create_bounty(pay,uint64)void", method "claim()void", method "submit_work()void", method "approve()void", method "cancel()void", method "get_bounty_info()(address,address,uint64,uint64)"
+    txna ApplicationArgs 0
+    match main_create_bounty_route@5 main_claim_route@6 main_submit_work_route@7 main_approve_route@8 main_cancel_route@9 main_get_bounty_info_route@10
+
+main_after_if_else@13:
+    // smart_contracts/bounty/contract.py:5
+    // class Bounty(ARC4Contract):
+    intc_0 // 0
+    return
+
+main_get_bounty_info_route@10:
+    // smart_contracts/bounty/contract.py:72
+    // @abimethod(readonly=True)
+    txn OnCompletion
+    !
+    assert // OnCompletion is not NoOp
+    txn ApplicationID
+    assert // can only call when not creating
+    callsub get_bounty_info
+    swap
+    itob
+    swap
+    itob
+    uncover 3
+    uncover 3
+    concat
+    uncover 2
+    concat
+    swap
+    concat
+    pushbytes 0x151f7c75
+    swap
+    concat
+    log
+    intc_1 // 1
+    return
+
+main_cancel_route@9:
+    // smart_contracts/bounty/contract.py:59
+    // @abimethod()
+    txn OnCompletion
+    !
+    assert // OnCompletion is not NoOp
+    txn ApplicationID
+    assert // can only call when not creating
+    callsub cancel
+    intc_1 // 1
+    return
+
+main_approve_route@8:
+    // smart_contracts/bounty/contract.py:46
+    // @abimethod()
+    txn OnCompletion
+    !
+    assert // OnCompletion is not NoOp
+    txn ApplicationID
+    assert // can only call when not creating
+    callsub approve
+    intc_1 // 1
+    return
+
+main_submit_work_route@7:
+    // smart_contracts/bounty/contract.py:39
+    // @abimethod()
+    txn OnCompletion
+    !
+    assert // OnCompletion is not NoOp
+    txn ApplicationID
+    assert // can only call when not creating
+    callsub submit_work
+    intc_1 // 1
+    return
+
+main_claim_route@6:
+    // smart_contracts/bounty/contract.py:31
+    // @abimethod()
+    txn OnCompletion
+    !
+    assert // OnCompletion is not NoOp
+    txn ApplicationID
+    assert // can only call when not creating
+    callsub claim
+    intc_1 // 1
+    return
+
+main_create_bounty_route@5:
+    // smart_contracts/bounty/contract.py:19
+    // @abimethod()
+    txn OnCompletion
+    !
+    assert // OnCompletion is not NoOp
+    txn ApplicationID
+    assert // can only call when not creating
+    // smart_contracts/bounty/contract.py:5
+    // class Bounty(ARC4Contract):
+    txn GroupIndex
+    intc_1 // 1
+    -
+    dup
+    gtxns TypeEnum
+    intc_1 // pay
+    ==
+    assert // transaction type is pay
+    txna ApplicationArgs 1
+    btoi
+    // smart_contracts/bounty/contract.py:19
+    // @abimethod()
+    callsub create_bounty
+    intc_1 // 1
+    return
+
+main_bare_routing@11:
+    // smart_contracts/bounty/contract.py:5
+    // class Bounty(ARC4Contract):
+    txn OnCompletion
+    bnz main_after_if_else@13
+    txn ApplicationID
+    !
+    assert // can only call when creating
+    intc_1 // 1
+    return
+
+
+// smart_contracts.bounty.contract.Bounty.create_bounty(payment: uint64, amount: uint64) -> void:
+create_bounty:
+    // smart_contracts/bounty/contract.py:19-20
+    // @abimethod()
+    // def create_bounty(self, payment: gtxn.PaymentTransaction, amount: UInt64) -> None:
+    proto 2 0
+    // smart_contracts/bounty/contract.py:21
+    // assert Txn.sender == self.creator
+    txn Sender
+    intc_0 // 0
+    bytec_1 // "creator"
+    app_global_get_ex
+    assert // check self.creator exists
+    ==
+    assert
+    // smart_contracts/bounty/contract.py:22
+    // assert self.amount == UInt64(0)
+    intc_0 // 0
+    bytec_2 // "amount"
+    app_global_get_ex
+    assert // check self.amount exists
+    !
+    assert
+    // smart_contracts/bounty/contract.py:23
+    // assert self.status == UInt64(0)
+    intc_0 // 0
+    bytec_0 // "status"
+    app_global_get_ex
+    assert // check self.status exists
+    !
+    assert
+    // smart_contracts/bounty/contract.py:25
+    // assert payment.sender == self.creator
+    frame_dig -2
+    gtxns Sender
+    intc_0 // 0
+    bytec_1 // "creator"
+    app_global_get_ex
+    assert // check self.creator exists
+    ==
+    assert
+    // smart_contracts/bounty/contract.py:26
+    // assert payment.receiver == Global.current_application_address
+    frame_dig -2
+    gtxns Receiver
+    global CurrentApplicationAddress
+    ==
+    assert
+    // smart_contracts/bounty/contract.py:27
+    // assert payment.amount == amount
+    frame_dig -2
+    gtxns Amount
+    frame_dig -1
+    ==
+    assert
+    // smart_contracts/bounty/contract.py:29
+    // self.amount = amount
+    bytec_2 // "amount"
+    frame_dig -1
+    app_global_put
+    retsub
+
+
+// smart_contracts.bounty.contract.Bounty.claim() -> void:
+claim:
+    // smart_contracts/bounty/contract.py:33
+    // assert self.status == UInt64(0)
+    intc_0 // 0
+    bytec_0 // "status"
+    app_global_get_ex
+    assert // check self.status exists
+    !
+    assert
+    // smart_contracts/bounty/contract.py:34
+    // assert Txn.sender != self.creator
+    txn Sender
+    intc_0 // 0
+    bytec_1 // "creator"
+    app_global_get_ex
+    assert // check self.creator exists
+    !=
+    assert
+    // smart_contracts/bounty/contract.py:36
+    // self.worker = Txn.sender
+    bytec_3 // "worker"
+    txn Sender
+    app_global_put
+    // smart_contracts/bounty/contract.py:37
+    // self.status = UInt64(1)
+    bytec_0 // "status"
+    intc_1 // 1
+    app_global_put
+    retsub
+
+
+// smart_contracts.bounty.contract.Bounty.submit_work() -> void:
+submit_work:
+    // smart_contracts/bounty/contract.py:41
+    // assert Txn.sender == self.worker
+    txn Sender
+    intc_0 // 0
+    bytec_3 // "worker"
+    app_global_get_ex
+    assert // check self.worker exists
+    ==
+    assert
+    // smart_contracts/bounty/contract.py:42
+    // assert self.status == UInt64(1)
+    intc_0 // 0
+    bytec_0 // "status"
+    app_global_get_ex
+    assert // check self.status exists
+    intc_1 // 1
+    ==
+    assert
+    // smart_contracts/bounty/contract.py:44
+    // self.status = UInt64(2)
+    bytec_0 // "status"
+    intc_2 // 2
+    app_global_put
+    retsub
+
+
+// smart_contracts.bounty.contract.Bounty.approve() -> void:
+approve:
+    // smart_contracts/bounty/contract.py:48
+    // assert Txn.sender == self.creator
+    txn Sender
+    intc_0 // 0
+    bytec_1 // "creator"
+    app_global_get_ex
+    assert // check self.creator exists
+    ==
+    assert
+    // smart_contracts/bounty/contract.py:49
+    // assert self.status == UInt64(2)
+    intc_0 // 0
+    bytec_0 // "status"
+    app_global_get_ex
+    assert // check self.status exists
+    intc_2 // 2
+    ==
+    assert
+    // smart_contracts/bounty/contract.py:51-54
+    // itxn.Payment(
+    //     receiver=self.worker,
+    //     amount=self.amount,
+    // ).submit()
+    itxn_begin
+    // smart_contracts/bounty/contract.py:52
+    // receiver=self.worker,
+    intc_0 // 0
+    bytec_3 // "worker"
+    app_global_get_ex
+    assert // check self.worker exists
+    // smart_contracts/bounty/contract.py:53
+    // amount=self.amount,
+    intc_0 // 0
+    bytec_2 // "amount"
+    app_global_get_ex
+    assert // check self.amount exists
+    itxn_field Amount
+    itxn_field Receiver
+    // smart_contracts/bounty/contract.py:51
+    // itxn.Payment(
+    intc_1 // pay
+    itxn_field TypeEnum
+    intc_0 // 0
+    itxn_field Fee
+    // smart_contracts/bounty/contract.py:51-54
+    // itxn.Payment(
+    //     receiver=self.worker,
+    //     amount=self.amount,
+    // ).submit()
+    itxn_submit
+    // smart_contracts/bounty/contract.py:56
+    // self.amount = UInt64(0)
+    bytec_2 // "amount"
+    intc_0 // 0
+    app_global_put
+    // smart_contracts/bounty/contract.py:57
+    // self.status = UInt64(3)
+    bytec_0 // "status"
+    pushint 3 // 3
+    app_global_put
+    retsub
+
+
+// smart_contracts.bounty.contract.Bounty.cancel() -> void:
+cancel:
+    // smart_contracts/bounty/contract.py:61
+    // assert Txn.sender == self.creator
+    txn Sender
+    intc_0 // 0
+    bytec_1 // "creator"
+    app_global_get_ex
+    assert // check self.creator exists
+    ==
+    assert
+    // smart_contracts/bounty/contract.py:62
+    // assert self.status == UInt64(0)
+    intc_0 // 0
+    bytec_0 // "status"
+    app_global_get_ex
+    assert // check self.status exists
+    !
+    assert
+    // smart_contracts/bounty/contract.py:64-67
+    // itxn.Payment(
+    //     receiver=self.creator,
+    //     amount=self.amount,
+    // ).submit()
+    itxn_begin
+    // smart_contracts/bounty/contract.py:65
+    // receiver=self.creator,
+    intc_0 // 0
+    bytec_1 // "creator"
+    app_global_get_ex
+    assert // check self.creator exists
+    // smart_contracts/bounty/contract.py:66
+    // amount=self.amount,
+    intc_0 // 0
+    bytec_2 // "amount"
+    app_global_get_ex
+    assert // check self.amount exists
+    itxn_field Amount
+    itxn_field Receiver
+    // smart_contracts/bounty/contract.py:64
+    // itxn.Payment(
+    intc_1 // pay
+    itxn_field TypeEnum
+    intc_0 // 0
+    itxn_field Fee
+    // smart_contracts/bounty/contract.py:64-67
+    // itxn.Payment(
+    //     receiver=self.creator,
+    //     amount=self.amount,
+    // ).submit()
+    itxn_submit
+    // smart_contracts/bounty/contract.py:69
+    // self.amount = UInt64(0)
+    bytec_2 // "amount"
+    intc_0 // 0
+    app_global_put
+    // smart_contracts/bounty/contract.py:70
+    // self.status = UInt64(4)
+    bytec_0 // "status"
+    pushint 4 // 4
+    app_global_put
+    retsub
+
+
+// smart_contracts.bounty.contract.Bounty.get_bounty_info() -> bytes, bytes, uint64, uint64:
+get_bounty_info:
+    // smart_contracts/bounty/contract.py:74
+    // return self.creator, self.worker, self.amount, self.status
+    intc_0 // 0
+    bytec_1 // "creator"
+    app_global_get_ex
+    assert // check self.creator exists
+    intc_0 // 0
+    bytec_3 // "worker"
+    app_global_get_ex
+    assert // check self.worker exists
+    intc_0 // 0
+    bytec_2 // "amount"
+    app_global_get_ex
+    assert // check self.amount exists
+    intc_0 // 0
+    bytec_0 // "status"
+    app_global_get_ex
+    assert // check self.status exists
+    retsub
