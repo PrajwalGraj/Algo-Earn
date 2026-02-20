@@ -349,7 +349,15 @@ const BountyDetailModal = ({ bounty, onClose }: BountyDetailModalProps) => {
                       <>
                         <span className="text-border">|</span>
                         <span className="flex items-center gap-1 font-mono text-xs">
-                          App ID: {bounty.appId}
+                          App ID:{' '}
+                          <a
+                            href={`https://testnet.explorer.perawallet.app/application/${bounty.appId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800 hover:underline"
+                          >
+                            {bounty.appId}
+                          </a>
                         </span>
                       </>
                     )}
@@ -660,7 +668,14 @@ const BountyDetailModal = ({ bounty, onClose }: BountyDetailModalProps) => {
                           <div className="space-y-2 bg-white/70 rounded-lg p-3 text-sm">
                             <div className="flex items-center justify-between">
                               <span className="text-muted-foreground">App ID</span>
-                              <span className="font-mono font-semibold text-foreground">{approveResult.appId}</span>
+                              <a
+                                href={`https://testnet.explorer.perawallet.app/application/${approveResult.appId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-mono font-semibold text-blue-600 hover:text-blue-800 hover:underline"
+                              >
+                                {approveResult.appId}
+                              </a>
                             </div>
                             <div className="flex items-center justify-between gap-2">
                               <span className="text-muted-foreground shrink-0">Transaction ID</span>

@@ -100,7 +100,15 @@ const BountiesList: React.FC<BountiesListProps> = ({ refreshTrigger = 0 }) => {
 
                 {/* App ID */}
                 <div className="text-xs text-gray-500 break-all font-mono">
-                  App ID: {bounty.appId}
+                  App ID:{' '}
+                  <a
+                    href={`https://testnet.explorer.perawallet.app/application/${bounty.appId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:text-blue-800 hover:underline"
+                  >
+                    {bounty.appId}
+                  </a>
                 </div>
               </div>
 
