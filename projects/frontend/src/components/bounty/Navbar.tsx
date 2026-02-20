@@ -68,7 +68,7 @@ const Navbar = ({
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
         {/* Logo */}
         <a href="/" className="flex items-center gap-2 group">
-          <div className="h-8 w-8 rounded-lg animated-logo shadow-lg shadow-violet-500/25 transition-shadow duration-300 group-hover:shadow-violet-500/40" />
+          <img src="/images/logo.png" alt="BountyHub" className="h-9 w-9 object-contain transition-transform duration-300 group-hover:scale-110" />
           <span className="font-display text-xl font-bold text-foreground">
             Bounty<span className="animated-gradient-text">Hub</span>
           </span>

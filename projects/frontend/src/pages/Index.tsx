@@ -241,7 +241,7 @@ const Index = () => {
               {/* Brand */}
               <div className="md:col-span-1">
                 <a href="/" className="flex items-center gap-2 mb-4">
-                  <div className="h-8 w-8 rounded-lg animated-logo shadow-md shadow-violet-500/15" />
+                  <img src="/images/logo.png" alt="BountyHub" className="h-9 w-9 object-contain" />
                   <span className="font-display text-xl font-bold text-slate-700">
                     Bounty<span className="text-gradient-primary">Hub</span>
                   </span>

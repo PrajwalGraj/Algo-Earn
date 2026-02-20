@@ -1,49 +1,47 @@
 import algosdk from "algosdk";
+import { AlgorandClient, microAlgos } from "@algorandfoundation/algokit-utils";
+import { BountyClient, BountyFactory } from "../contracts/Bounty";
+import { getAlgodConfigFromViteEnvironment } from "./network/getAlgoClientConfigs";
+import { makePaymentTxnWithSuggestedParamsFromObject, getApplicationAddress } from "algosdk";
 
 const ALGOD_SERVER = "https://testnet-api.algonode.cloud";
 const ALGOD_TOKEN = "";
 
-/**
- * Get or compile bounty contract bytecode
- */
-export async function getBountyBytecode() {
-  const algod = new algosdk.Algodv2(ALGOD_TOKEN, ALGOD_SERVER, "");
-
-  // Minimal approval program
-  const approvalTealSource = `#pragma version 10
-txn ApplicationID
-bz create
-int 1
-return
-create:
-int 1
-return`;
-
-  const clearTealSource = `#pragma version 10
-int 1`;
-
-  console.log("📍 Compiling approval program...");
-  const approvalCompiled = await algod.compile(approvalTealSource).do();
-  const approvalProgram = new Uint8Array(
-    atob(approvalCompiled.result)
-      .split("")
-      .map((c) => c.charCodeAt(0))
-  );
-
-  console.log("📍 Compiling clear program...");
-  const clearCompiled = await algod.compile(clearTealSource).do();
-  const clearProgram = new Uint8Array(
-    atob(clearCompiled.result)
-      .split("")
-      .map((c) => c.charCodeAt(0))
-  );
-
-  return { approvalProgram, clearProgram };
+/** Status codes: 0=Open, 1=Claimed, 2=Submitted, 3=Approved, 4=Cancelled */
+export interface OnChainBountyInfo {
+  creator: string;
+  worker: string;
+  amount: bigint;
+  status: number; // 0=Open, 1=Claimed, 2=Submitted, 3=Approved, 4=Cancelled
 }
 
 /**
- * Create a bounty app on Algorand using connected wallet to sign
- * All transactions are built and signed client-side
+ * Fetch on-chain bounty state (creator, worker, amount, status)
+ * by reading the app's global state directly (no signer required).
+ */
+export async function getBountyOnChainInfo(
+  appId: number
+): Promise<OnChainBountyInfo> {
+  const algorand = getAlgorandClient();
+  const client = new BountyClient({ appId: BigInt(appId), algorand });
+  const state = await client.state.global.getAll();
+  return {
+    creator: state.creator ?? "",
+    worker: state.worker ?? "",
+    amount: state.amount ?? BigInt(0),
+    status: Number(state.status ?? 0),
+  };
+}
+
+/** Create a shared AlgorandClient instance from env config */
+function getAlgorandClient(): AlgorandClient {
+  return AlgorandClient.fromConfig({ algodConfig: getAlgodConfigFromViteEnvironment() });
+}
+
+/**
+ * Create a bounty app on Algorand using the REAL Bounty contract (ARC4).
+ * This deploys the actual bounty smart contract with escrow logic,
+ * funds it with min balance, and calls create_bounty to set the reward.
  */
 export async function createBountyWithWallet(
   creatorAddress: string,
@@ -54,79 +52,57 @@ export async function createBountyWithWallet(
   ) => Promise<Uint8Array[]>
 ): Promise<{ appId: number; appAddress: string; txnId: string }> {
   try {
-    const algod = new algosdk.Algodv2(ALGOD_TOKEN, ALGOD_SERVER, "");
+    const algorand = getAlgorandClient();
+    algorand.setDefaultSigner(transactionSigner);
 
-    console.log("📍 Step 1: Getting network parameters...");
-    const suggestedParams = await algod.getTransactionParams().do();
+    const amountMicroAlgos = Math.round(amount * 1_000_000);
 
-    // Get the TEAL bytecode
-    console.log("📍 Step 2: Loading contract bytecode...");
-    const { approvalProgram, clearProgram } = await getBountyBytecode();
+    // Step 1: Deploy the real Bounty contract (bare create)
+    console.log("📍 Step 1: Deploying Bounty ARC4 contract...");
+    const factory = new BountyFactory({ defaultSender: creatorAddress, algorand });
+    const { appClient } = await factory.send.create.bare();
+    const appId = Number(appClient.appId);
+    const appAddr = getApplicationAddress(appId);
+    console.log(`✅ App Created! ID: ${appId}, Address: ${appAddr}`);
 
-    console.log("📍 Step 3: Building ApplicationCreateTxn...");
-    // Create the application creation transaction
-    const appCreateTxn = algosdk.makeApplicationCreateTxnFromObject({
+    // Step 2: Fund the app account with min balance (0.1 ALGO)
+    console.log("📍 Step 2: Funding app with minimum balance...");
+    await algorand.send.payment({
       sender: creatorAddress,
-      approvalProgram,
-      clearProgram,
-      numGlobalInts: 10,
-      numGlobalByteSlices: 10,
-      numLocalInts: 0,
-      numLocalByteSlices: 0,
-      onComplete: 0, // OnComplete.NoOp
-      suggestedParams,
+      receiver: String(appAddr),
+      amount: microAlgos(100_000),
+      signer: transactionSigner,
+    });
+    console.log("✅ App funded with 0.1 ALGO min balance");
+
+    // Step 3: Call create_bounty ABI method with a grouped payment txn
+    console.log("📍 Step 3: Calling create_bounty method with payment...");
+    const sp = await algorand.client.algod.getTransactionParams().do();
+    const payTxn = makePaymentTxnWithSuggestedParamsFromObject({
+      sender: creatorAddress,
+      receiver: appAddr,
+      amount: amountMicroAlgos,
+      suggestedParams: sp,
     });
 
-    console.log("📍 Step 4: GroupID assignment...");
-    const transactions = [appCreateTxn];
-    algosdk.assignGroupID(transactions);
-
-    console.log("📍 Step 5: Requesting wallet signature...");
-    // Request wallet to sign - pass Transaction[] and indices
-    const signedTxns = await transactionSigner(transactions, [0]);
-    console.log("✅ Wallet signed transactions!");
-
-    console.log("📍 Step 6: Sending to network...");
-    // Send signed transactions
-    const sendResponse = await algod.sendRawTransaction(signedTxns[0]).do();
-    const txId = sendResponse.txid; // lowercase txid
-
-    console.log(`📍 Step 7: Waiting for confirmation (txn: ${txId})`);
-    // Wait for confirmation
-    const result = await algosdk.waitForConfirmation(algod, txId, 4);
-
-    // Extract app ID from transaction result
-    const createdAppId = result.applicationIndex;
-    if (!createdAppId) {
-      throw new Error("Failed to extract app ID from transaction");
-    }
-
-    const appAddress = algosdk.getApplicationAddress(createdAppId);
-    console.log(`✅ App Created! ID: ${createdAppId}, Address: ${appAddress}`);
-
-    // Fund the app with both minimum balance and reward amount
-    console.log(`📍 Step 8: Funding app with min balance and reward amount...`);
-    const minBalanceAmount = 100_000; // 0.1 ALGO in microAlgos
-    const rewardAmount = Math.floor(amount * 1_000_000); // Convert ALGO to microAlgos
-    const totalFund = minBalanceAmount + rewardAmount;
-    const freshParams = await algod.getTransactionParams().do();
-    const fundTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-      sender: creatorAddress,
-      receiver: appAddress,
-      amount: totalFund,
-      suggestedParams: freshParams,
+    const client = new BountyClient({
+      appId: BigInt(appId),
+      algorand,
+      defaultSigner: transactionSigner,
     });
-    algosdk.assignGroupID([fundTxn]);
-    const fundSigned = await transactionSigner([fundTxn], [0]);
-    const fundResponse = await algod.sendRawTransaction(fundSigned[0]).do();
-    const fundTxId = fundResponse.txid; // lowercase txid
-    await algosdk.waitForConfirmation(algod, fundTxId, 4);
-    console.log(`✅ App funded with total: ${(totalFund / 1_000_000).toFixed(2)} ALGO!`);
+    const result = await client.send.createBounty({
+      args: {
+        payment: { txn: payTxn, signer: transactionSigner },
+        amount: BigInt(amountMicroAlgos),
+      },
+      sender: creatorAddress,
+    });
+    console.log(`✅ create_bounty called! Reward: ${amount} ALGO escrowed in app`);
 
     return {
-      appId: Number(createdAppId),
-      appAddress: String(appAddress),
-      txnId: txId,
+      appId,
+      appAddress: String(appAddr),
+      txnId: result.transaction.txID(),
     };
   } catch (error) {
     console.error("❌ Error creating bounty:", error);
@@ -135,7 +111,8 @@ export async function createBountyWithWallet(
 }
 
 /**
- * Call the create_bounty method on deployed app
+ * Call the create_bounty method on an already-deployed bounty app.
+ * Uses proper ARC4 ABI encoding via the typed BountyClient.
  */
 export async function callCreateBountyMethod(
   appId: number,
@@ -147,32 +124,35 @@ export async function callCreateBountyMethod(
   ) => Promise<Uint8Array[]>
 ): Promise<string> {
   try {
-    const algod = new algosdk.Algodv2(ALGOD_TOKEN, ALGOD_SERVER, "");
+    const algorand = getAlgorandClient();
+    algorand.setDefaultSigner(transactionSigner);
 
-    console.log("📍 Calling create_bounty method...");
-    const suggestedParams = await algod.getTransactionParams().do();
+    const amountMicroAlgos = Math.round(bountyAmount * 1_000_000);
 
-    // Build app call transaction
-    const appCallTxn = algosdk.makeApplicationNoOpTxnFromObject({
+    const sp = await algorand.client.algod.getTransactionParams().do();
+    const appAddr = getApplicationAddress(appId);
+    const payTxn = makePaymentTxnWithSuggestedParamsFromObject({
       sender: creatorAddress,
-      appIndex: appId,
-      appArgs: [
-        new TextEncoder().encode("create_bounty"),
-        algosdk.encodeUint64(Math.floor(bountyAmount * 1_000_000)),
-      ],
-      suggestedParams,
+      receiver: appAddr,
+      amount: amountMicroAlgos,
+      suggestedParams: sp,
     });
 
-    algosdk.assignGroupID([appCallTxn]);
-    const signedTxns = await transactionSigner([appCallTxn], [0]);
-
-    const response = await algod.sendRawTransaction(signedTxns[0]).do();
-    const txId = response.txid; // Extract txid from response
-
-    await algosdk.waitForConfirmation(algod, txId, 4);
+    const client = new BountyClient({
+      appId: BigInt(appId),
+      algorand,
+      defaultSigner: transactionSigner,
+    });
+    console.log("📍 Calling create_bounty ABI method...");
+    const result = await client.send.createBounty({
+      args: {
+        payment: { txn: payTxn, signer: transactionSigner },
+        amount: BigInt(amountMicroAlgos),
+      },
+      sender: creatorAddress,
+    });
     console.log("✅ create_bounty method called!");
-
-    return txId;
+    return result.transaction.txID();
   } catch (error) {
     console.error("❌ Error calling create_bounty:", error);
     throw error;
@@ -181,6 +161,7 @@ export async function callCreateBountyMethod(
 
 /**
  * Call the claim method on the bounty contract
+ * Uses typed BountyClient for proper ARC4 ABI encoding
  */
 export async function callClaimMethod(
   appId: number,
@@ -190,29 +171,25 @@ export async function callClaimMethod(
     indexesToSign: number[]
   ) => Promise<Uint8Array[]>
 ): Promise<string> {
-  const algod = new algosdk.Algodv2(ALGOD_TOKEN, ALGOD_SERVER, "");
-  let suggestedParams = await algod.getTransactionParams().do();
-  suggestedParams.flatFee = true;
-  suggestedParams.fee = suggestedParams.fee > 2000 ? suggestedParams.fee : 2000;
-  const appCallTxn = algosdk.makeApplicationNoOpTxnFromObject({
-    sender,
-    appIndex: appId,
-    appArgs: [new TextEncoder().encode("claim")],
-    suggestedParams,
+  const algorand = AlgorandClient.fromConfig({ algodConfig: getAlgodConfigFromViteEnvironment() });
+  algorand.setDefaultSigner(transactionSigner);
+  const client = new BountyClient({
+    appId: BigInt(appId),
+    algorand,
+    defaultSigner: transactionSigner,
   });
-  algosdk.assignGroupID([appCallTxn]);
-  const signedTxns = await transactionSigner([appCallTxn], [0]);
   console.log("Sending claim transaction for appId:", appId);
-  const response = await algod.sendRawTransaction(signedTxns[0]).do();
-  console.log("Claim response:", response);
-  const txId = response.txid;
-  const confirmation = await algosdk.waitForConfirmation(algod, txId, 4);
-  console.log("Claim confirmed:", confirmation);
-  return txId;
+  const result = await client.send.claim({
+    args: [],
+    sender,
+  });
+  console.log("Claim confirmed:", result);
+  return result.transaction.txID();
 }
 
 /**
  * Call the submit_work method on the bounty contract
+ * Uses typed BountyClient for proper ARC4 ABI encoding
  */
 export async function callSubmitWorkMethod(
   appId: number,
@@ -222,29 +199,28 @@ export async function callSubmitWorkMethod(
     indexesToSign: number[]
   ) => Promise<Uint8Array[]>
 ): Promise<string> {
-  const algod = new algosdk.Algodv2(ALGOD_TOKEN, ALGOD_SERVER, "");
-  let suggestedParams = await algod.getTransactionParams().do();
-  suggestedParams.flatFee = true;
-  suggestedParams.fee = suggestedParams.fee > 2000 ? suggestedParams.fee : 2000;
-  const appCallTxn = algosdk.makeApplicationNoOpTxnFromObject({
-    sender,
-    appIndex: appId,
-    appArgs: [new TextEncoder().encode("submit_work")],
-    suggestedParams,
+  const algorand = AlgorandClient.fromConfig({ algodConfig: getAlgodConfigFromViteEnvironment() });
+  algorand.setDefaultSigner(transactionSigner);
+  const client = new BountyClient({
+    appId: BigInt(appId),
+    algorand,
+    defaultSigner: transactionSigner,
   });
-  algosdk.assignGroupID([appCallTxn]);
-  const signedTxns = await transactionSigner([appCallTxn], [0]);
   console.log("Sending submit_work transaction for appId:", appId);
-  const response = await algod.sendRawTransaction(signedTxns[0]).do();
-  console.log("Submit response:", response);
-  const txId = response.txid;
-  const confirmation = await algosdk.waitForConfirmation(algod, txId, 4);
-  console.log("Submit confirmed:", confirmation);
-  return txId;
+  const result = await client.send.submitWork({
+    args: [],
+    sender,
+  });
+  console.log("Submit confirmed:", result);
+  return result.transaction.txID();
 }
 
 /**
- * Call the approve method on the bounty contract
+ * Call the approve method on the bounty contract.
+ * Uses typed BountyClient for proper ARC4 ABI encoding.
+ * The approve() method issues an inner payment transaction that transfers
+ * the escrowed ALGO from the app account to the worker.
+ * extraFee covers the inner transaction fee.
  */
 export async function callApproveMethod(
   appId: number,
@@ -255,24 +231,19 @@ export async function callApproveMethod(
   ) => Promise<Uint8Array[]>,
   workerAddress: string
 ): Promise<string> {
-  const algod = new algosdk.Algodv2(ALGOD_TOKEN, ALGOD_SERVER, "");
-  let suggestedParams = await algod.getTransactionParams().do();
-  suggestedParams.flatFee = true;
-  suggestedParams.fee = suggestedParams.fee > 2000 ? suggestedParams.fee : 2000;
-  const appCallTxn = algosdk.makeApplicationNoOpTxnFromObject({
-    sender,
-    appIndex: appId,
-    appArgs: [new TextEncoder().encode("approve")],
-    accounts: [workerAddress],
-    suggestedParams,
+  const algorand = AlgorandClient.fromConfig({ algodConfig: getAlgodConfigFromViteEnvironment() });
+  algorand.setDefaultSigner(transactionSigner);
+  const client = new BountyClient({
+    appId: BigInt(appId),
+    algorand,
+    defaultSigner: transactionSigner,
   });
-  algosdk.assignGroupID([appCallTxn]);
-  const signedTxns = await transactionSigner([appCallTxn], [0]);
-  console.log("Sending approve transaction for appId:", appId);
-  const response = await algod.sendRawTransaction(signedTxns[0]).do();
-  console.log("Approve response:", response);
-  const txId = response.txid;
-  const confirmation = await algosdk.waitForConfirmation(algod, txId, 4);
-  console.log("Approve confirmed:", confirmation);
-  return txId;
+  console.log("Sending approve transaction for appId:", appId, "worker:", workerAddress);
+  const result = await client.send.approve({
+    args: [],
+    sender,
+    extraFee: microAlgos(1000), // Cover the inner payment transaction fee
+  });
+  console.log("Approve confirmed:", result);
+  return result.transaction.txID();
 }

@@ -14,7 +14,6 @@ import {
 import { useWallet } from "@txnlab/use-wallet-react";
 import {
   createBountyWithWallet,
-  callCreateBountyMethod,
 } from "@/utils/bountyService";
 import { saveBounty } from "@/utils/bountyStorage";
 
@@ -66,8 +65,8 @@ const CreateBountyModal = ({ open, onClose, onBountyCreated }: CreateBountyModal
       console.log(`Creator: ${activeAddress}`);
       console.log(`Reward: ${reward} ALGO`);
 
-      // Step 1: Create the app
-      console.log("\n📍 STEP 1: Creating Bounty App Contract");
+      // Deploy the real Bounty ARC4 contract, fund it, and call create_bounty
+      console.log("\n📍 Deploying & initializing Bounty contract...");
       const appResult = await createBountyWithWallet(
         activeAddress,
         Number(reward),
@@ -75,20 +74,9 @@ const CreateBountyModal = ({ open, onClose, onBountyCreated }: CreateBountyModal
       );
 
       console.log(
-        `✅ App created: ID ${appResult.appId}, Address: ${appResult.appAddress}`
+        `✅ Bounty contract deployed & funded: ID ${appResult.appId}, Address: ${appResult.appAddress}`
       );
       setAppId(appResult.appId);
-
-      // Step 2: Call create_bounty method
-      console.log("\n📍 STEP 2: Initializing Bounty Details");
-      const txnId = await callCreateBountyMethod(
-        appResult.appId,
-        activeAddress,
-        Number(reward),
-        transactionSigner
-      );
-
-      console.log(`✅ Bounty initialized: ${txnId}`);
 
       // Save bounty to localStorage
       console.log('💾 About to save bounty to localStorage...');

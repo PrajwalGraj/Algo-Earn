@@ -8,7 +8,6 @@ import {
   Users,
   MapPin,
   Bookmark,
-  ArrowUpRight,
   ChevronRight,
   CheckCircle2,
   Send,
@@ -27,6 +26,7 @@ import {
   callClaimMethod,
   callSubmitWorkMethod,
   callApproveMethod,
+  getBountyOnChainInfo,
 } from "@/utils/bountyService";
 
 interface BountyDetailModalProps {
@@ -145,18 +145,57 @@ const BountyDetailModal = ({ bounty, onClose }: BountyDetailModalProps) => {
   const [responses, setResponses] = useState<BountySubmission[]>([]);
   const [submitText, setSubmitText] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [showSubmitInput, setShowSubmitInput] = useState(false);
+
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [claiming, setClaiming] = useState(false);
+  const [claimSuccess, setClaimSuccess] = useState(false);
+  const [approveResult, setApproveResult] = useState<{ success: boolean; appId?: number; txId?: string; error?: string } | null>(null);
+  const [approving, setApproving] = useState(false);
 
-  // Load submissions whenever bounty changes
+  // On-chain state: track whether user has claimed this bounty
+  const [onChainStatus, setOnChainStatus] = useState<number | null>(null); // null=loading
+  const [onChainWorker, setOnChainWorker] = useState<string | null>(null);
+  const [stateLoading, setStateLoading] = useState(false);
+
+  // Derived: is the connected wallet the on-chain worker who claimed?
+  const isClaimedByMe =
+    !!activeAddress &&
+    !!onChainWorker &&
+    activeAddress.toLowerCase() === onChainWorker.toLowerCase() &&
+    (onChainStatus === 1 || claimSuccess);
+
+  // Fetch on-chain bounty state
+  const fetchOnChainState = async () => {
+    if (!bounty?.appId) return;
+    setStateLoading(true);
+    try {
+      const info = await getBountyOnChainInfo(bounty.appId);
+      setOnChainStatus(info.status);
+      setOnChainWorker(info.worker);
+      // If the on-chain status shows claimed by this user, mark claim as done
+      if (
+        activeAddress &&
+        info.worker.toLowerCase() === activeAddress.toLowerCase() &&
+        info.status >= 1
+      ) {
+        setClaimSuccess(true);
+      }
+    } catch (err) {
+      console.error("Failed to fetch on-chain bounty state:", err);
+    } finally {
+      setStateLoading(false);
+    }
+  };
+
+  // Load submissions and on-chain state whenever bounty changes
   useEffect(() => {
     if (bounty) {
       setResponses(getSubmissionsForBounty(bounty.id));
+      fetchOnChainState();
     }
-  }, [bounty]);
+  }, [bounty, activeAddress]);
 
   const handleSubmit = async () => {
     await handleSubmitWork();
@@ -173,8 +212,27 @@ const BountyDetailModal = ({ bounty, onClose }: BountyDetailModalProps) => {
       console.log("Claiming work on-chain", { appId: bounty.appId, sender: activeAddress });
       await callClaimMethod(bounty.appId, activeAddress, transactionSigner);
       console.log("Claim work transaction sent");
+      setClaimSuccess(true);
+      // Refresh on-chain state so submit form becomes available
+      await fetchOnChainState();
     } catch (err: any) {
-      setClaimError(err?.message || "Failed to claim work. See console for details.");
+      const raw = err?.message || err?.toString() || "";
+      let errorMsg: string;
+      if (raw.includes("assert failed") || raw.includes("logic eval error")) {
+        // Refresh on-chain state to understand the actual problem
+        try { await fetchOnChainState(); } catch (_) {}
+        if (onChainStatus === 1 || onChainStatus === 2 || onChainStatus === 3) {
+          errorMsg = "This bounty has already been claimed" +
+            (onChainStatus === 2 ? " and work was submitted." :
+             onChainStatus === 3 ? " and has been approved." : " by another worker.");
+          setClaimSuccess(onChainStatus >= 1 && isClaimedByMe);
+        } else {
+          errorMsg = "Cannot claim this bounty. It may already be claimed or no longer available.";
+        }
+      } else {
+        errorMsg = raw || "Failed to claim work. See console for details.";
+      }
+      setClaimError(errorMsg);
       console.error("Claim work error:", err);
     } finally {
       setClaiming(false);
@@ -198,14 +256,26 @@ const BountyDetailModal = ({ bounty, onClose }: BountyDetailModalProps) => {
       await callSubmitWorkMethod(bounty.appId, activeAddress, transactionSigner);
       console.log("Submit work transaction sent");
       setSubmitSuccess(true);
-      setShowSubmitInput(false);
       setSubmitText("");
       addSubmission(bounty.id, activeAddress, submitText.trim());
       setResponses(getSubmissionsForBounty(bounty.id));
     } catch (err: any) {
-      let errorMsg = err?.message || err?.toString() || "Failed to submit work. See console for details.";
+      const raw = err?.message || err?.toString() || "";
+      let errorMsg: string;
+      if (raw.includes("pc=322") || raw.includes("assert failed")) {
+        if (!isClaimedByMe) {
+          errorMsg = "You must claim this bounty before submitting work. Click 'Claim Work' first.";
+        } else if (onChainStatus === 2) {
+          errorMsg = "Work has already been submitted for this bounty.";
+        } else if (onChainStatus === 3) {
+          errorMsg = "This bounty has already been approved.";
+        } else {
+          errorMsg = "Contract assertion failed. The bounty may not be in the correct state for submission.";
+        }
+      } else {
+        errorMsg = raw || "Failed to submit work. See console for details.";
+      }
       setSubmitError(errorMsg);
-      alert("Submit Response Error: " + errorMsg);
       console.error("Submit work error:", err);
       setSubmitSuccess(false);
     } finally {
@@ -215,21 +285,24 @@ const BountyDetailModal = ({ bounty, onClose }: BountyDetailModalProps) => {
 
   const handleApproveWork = async (subId: string) => {
     if (!bounty?.appId || !activeAddress || !transactionSigner) return;
-    // Find worker address from responses
     const workerAddress = responses.find(r => r.id === subId)?.submitter;
     if (!workerAddress) {
-      alert("Worker address not found for approval.");
+      setApproveResult({ success: false, error: "Worker address not found for approval." });
       return;
     }
+    setApproving(true);
+    setApproveResult(null);
     try {
       const txId = await callApproveMethod(bounty.appId, activeAddress, transactionSigner, workerAddress);
-      alert(`Approve transaction sent!\nApp ID: ${bounty.appId}\nTx ID: ${txId}`);
       console.log(`Approve transaction sent! App ID: ${bounty.appId}, Tx ID: ${txId}`);
-    } catch (err) {
-      alert(`Approve failed: ${err?.message || err}`);
+      setApproveResult({ success: true, appId: bounty.appId, txId });
+      handleApprove(subId);
+    } catch (err: any) {
       console.error("Approve failed:", err);
+      setApproveResult({ success: false, error: err?.message || String(err) });
+    } finally {
+      setApproving(false);
     }
-    handleApprove(subId);
   };
 
   return (
@@ -374,55 +447,47 @@ const BountyDetailModal = ({ bounty, onClose }: BountyDetailModalProps) => {
                   {claimError && (
                     <div className="text-red-600 text-xs font-semibold text-center mb-2">{claimError}</div>
                   )}
-                  <Button
-                    variant="outline"
-                    className="w-full border-emerald-400/40 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-500 font-semibold h-12 text-[15px]"
-                    onClick={handleClaimWork}
-                    disabled={claiming}
-                  >
-                    {claiming ? "Claiming..." : "Claim Work"}
-                    <Trophy className="ml-2 h-4 w-4" />
-                  </Button>
-                  {/* Only show Submit Now if user hasn't submitted yet */}
-                  {activeAddress && !responses.some((s) => s.submitter === activeAddress) && !submitSuccess && (
+                  {/* Only show Claim button when bounty is Open (status=0) or we haven't loaded state yet */}
+                  {(onChainStatus === null || onChainStatus === 0) && !claimSuccess && (
                     <Button
-                      className="w-full gradient-primary text-primary-foreground font-semibold glow-primary h-12 text-[15px]"
-                      onClick={() => { setShowSubmitInput((v) => !v); }}
+                      variant="outline"
+                      className="w-full font-semibold h-12 text-[15px] border-emerald-400/40 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-500"
+                      onClick={handleClaimWork}
+                      disabled={claiming || stateLoading}
                     >
-                      Submit Now
-                      <ArrowUpRight className="ml-2 h-4 w-4" />
+                      {claiming ? "Claiming..." : stateLoading ? "Loading..." : "Claim Work"}
+                      <Trophy className="ml-2 h-4 w-4" />
                     </Button>
                   )}
-                  {/* Show input only if not already submitted and not already successful */}
-                  {showSubmitInput && !responses.some((s) => s.submitter === activeAddress) && !submitSuccess && (
-                    <div className="mt-3">
-                      <textarea
-                        value={submitText}
-                        onChange={(e) => setSubmitText(e.target.value)}
-                        placeholder="Paste a link to your work or describe your submission..."
-                        rows={3}
-                        className="w-full rounded-xl border border-border bg-white/60 px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none mb-2"
-                      />
+                  {/* Claimed state */}
+                  {(claimSuccess || (onChainStatus === 1 && isClaimedByMe)) && (
+                    <div>
                       <Button
-                        onClick={handleSubmitWork}
-                        disabled={!submitText.trim() || submitting}
-                        className="w-full gradient-primary text-primary-foreground font-semibold glow-primary h-10 text-sm"
+                        variant="outline"
+                        className="w-full font-semibold h-12 text-[15px] border-emerald-500 bg-emerald-500/10 text-emerald-500 cursor-not-allowed"
+                        disabled
                       >
-                        {submitting ? "Submitting..." : "Submit Response"}
-                        <Send className="ml-2 h-4 w-4" />
+                        ✓ Work Claimed
                       </Button>
+                      <p className="text-xs text-muted-foreground text-center mt-1">Submit your work in the panel on the right.</p>
+                    </div>
+                  )}
+                  {/* Someone else claimed */}
+                  {onChainStatus === 1 && !isClaimedByMe && (
+                    <div className="text-amber-600 text-xs font-semibold text-center">
+                      This bounty has been claimed by another worker.
                     </div>
                   )}
                   {/* Show success message if just submitted */}
-                  {submitSuccess && (
+                  {(submitSuccess || onChainStatus === 2) && (
                     <div className="mt-3 text-green-600 text-sm font-semibold text-center">
-                      Submitted successfully!
+                      ✓ Work submitted — awaiting review.
                     </div>
                   )}
-                  {/* If already submitted, show info */}
-                  {activeAddress && responses.some((s) => s.submitter === activeAddress) && !submitSuccess && (
-                    <div className="mt-3 text-green-600 text-sm font-semibold text-center">
-                      You have already submitted your work.
+                  {/* Approved */}
+                  {onChainStatus === 3 && (
+                    <div className="mt-3 text-emerald-600 text-sm font-semibold text-center">
+                      ✓ Bounty approved & paid out.
                     </div>
                   )}
                 </div>
@@ -552,10 +617,20 @@ const BountyDetailModal = ({ bounty, onClose }: BountyDetailModalProps) => {
                                 <Button
                                   size="sm"
                                   onClick={async () => { await handleApproveWork(sub.id); }}
-                                  className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs h-8 px-3"
+                                  disabled={approving}
+                                  className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs h-8 px-3 disabled:opacity-50"
                                 >
-                                  <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                                  Approve
+                                  {approving ? (
+                                    <span className="flex items-center gap-1">
+                                      <span className="h-3 w-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                      Approving...
+                                    </span>
+                                  ) : (
+                                    <>
+                                      <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                                      Approve
+                                    </>
+                                  )}
                                 </Button>
                               )}
                             </div>
@@ -563,6 +638,54 @@ const BountyDetailModal = ({ bounty, onClose }: BountyDetailModalProps) => {
                         </div>
                       ))}
                     </div>
+                  )}
+
+                  {/* Approval transaction result banner */}
+                  {approveResult && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className={`mt-4 rounded-xl border p-4 ${
+                        approveResult.success
+                          ? "border-emerald-400/50 bg-emerald-50/60"
+                          : "border-red-400/50 bg-red-50/60"
+                      }`}
+                    >
+                      {approveResult.success ? (
+                        <div>
+                          <div className="flex items-center gap-2 mb-3">
+                            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                            <span className="font-bold text-emerald-700">Bounty Approved & Payment Sent!</span>
+                          </div>
+                          <div className="space-y-2 bg-white/70 rounded-lg p-3 text-sm">
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">App ID</span>
+                              <span className="font-mono font-semibold text-foreground">{approveResult.appId}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-muted-foreground shrink-0">Transaction ID</span>
+                              <a
+                                href={`https://testnet.explorer.perawallet.app/tx/${approveResult.txId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-mono text-xs text-violet-600 hover:text-violet-800 underline underline-offset-2 truncate"
+                              >
+                                {approveResult.txId}
+                              </a>
+                            </div>
+                          </div>
+                          <p className="text-xs text-emerald-600 mt-2">The escrowed ALGO has been transferred to the worker&apos;s wallet.</p>
+                        </div>
+                      ) : (
+                        <div className="flex items-start gap-2">
+                          <X className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-bold text-red-700">Approval Failed</span>
+                            <p className="text-sm text-red-600 mt-1 break-words">{approveResult.error}</p>
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
                   )}
                 </div>
               )}
@@ -574,21 +697,67 @@ const BountyDetailModal = ({ bounty, onClose }: BountyDetailModalProps) => {
                     <Send className="h-5 w-5 text-primary" />
                     Submit Your Work
                   </h3>
-                  <textarea
-                    value={submitText}
-                    onChange={(e) => setSubmitText(e.target.value)}
-                    placeholder="Paste a link to your work or describe your submission..."
-                    rows={4}
-                    className="w-full rounded-xl border border-border bg-white/60 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
-                  />
-                  <Button
-                    onClick={handleSubmitWork}
-                    disabled={!submitText.trim() || submitting}
-                    className="mt-3 gradient-primary text-primary-foreground font-semibold glow-primary h-10 px-6 text-sm"
-                  >
-                    {submitting ? "Submitting..." : "Submit Response"}
-                    <Send className="ml-2 h-4 w-4" />
-                  </Button>
+
+                  {/* Loading on-chain state */}
+                  {stateLoading && (
+                    <p className="text-sm text-muted-foreground italic">Checking bounty status...</p>
+                  )}
+
+                  {/* Not claimed yet — prompt user to claim first */}
+                  {!stateLoading && !isClaimedByMe && !submitSuccess && onChainStatus !== 2 && onChainStatus !== 3 && (
+                    <div className="rounded-xl border border-amber-300/50 bg-amber-50/40 p-4 text-center">
+                      <p className="text-sm text-amber-700 font-medium">You must claim this bounty before you can submit work.</p>
+                      <p className="text-xs text-amber-600 mt-1">Click "Claim Work" on the left panel first.</p>
+                    </div>
+                  )}
+
+                  {/* Already submitted on-chain */}
+                  {!stateLoading && onChainStatus === 2 && (
+                    <div className="rounded-xl border border-blue-300/50 bg-blue-50/40 p-4 text-center">
+                      <p className="text-sm text-blue-700 font-medium">Work has already been submitted for this bounty.</p>
+                      <p className="text-xs text-blue-600 mt-1">Waiting for the creator to review and approve.</p>
+                    </div>
+                  )}
+
+                  {/* Already approved */}
+                  {!stateLoading && onChainStatus === 3 && (
+                    <div className="rounded-xl border border-emerald-300/50 bg-emerald-50/40 p-4 text-center">
+                      <p className="text-sm text-emerald-700 font-medium">This bounty has been approved and paid out.</p>
+                    </div>
+                  )}
+
+                  {/* Claimed and ready to submit */}
+                  {!stateLoading && isClaimedByMe && !submitSuccess && onChainStatus === 1 && !responses.some((s) => s.submitter === activeAddress) && (
+                    <>
+                      <textarea
+                        value={submitText}
+                        onChange={(e) => setSubmitText(e.target.value)}
+                        placeholder="Paste a link to your work or describe your submission..."
+                        rows={4}
+                        className="w-full rounded-xl border border-border bg-white/60 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
+                      />
+                      {submitError && (
+                        <div className="mt-2 text-red-600 text-xs font-semibold">{submitError}</div>
+                      )}
+                      <Button
+                        onClick={handleSubmitWork}
+                        disabled={!submitText.trim() || submitting}
+                        className="mt-3 w-full gradient-primary text-primary-foreground font-semibold glow-primary h-12 text-[15px]"
+                      >
+                        {submitting ? "Submitting..." : "Submit Work"}
+                        <Send className="ml-2 h-4 w-4" />
+                      </Button>
+                    </>
+                  )}
+
+                  {/* Just submitted successfully */}
+                  {submitSuccess && (
+                    <div className="rounded-xl border border-emerald-300/50 bg-emerald-50/40 p-4 text-center">
+                      <CheckCircle2 className="h-5 w-5 text-emerald-600 mx-auto mb-2" />
+                      <p className="text-sm text-emerald-700 font-semibold">Work submitted successfully!</p>
+                      <p className="text-xs text-emerald-600 mt-1">The bounty creator will review your submission.</p>
+                    </div>
+                  )}
 
                   {/* Show own past submissions */}
                   {responses.filter((s) => s.submitter === activeAddress).length > 0 && (
